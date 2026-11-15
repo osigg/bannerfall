@@ -17,7 +17,8 @@ const clock = (t) => `Day ${Math.floor(t / 1440) + 1}, ${String(Math.floor((t % 
 const unitList = (u) => Object.entries(u || {}).filter(([, n]) => n >= 1).map(([t, n]) => `${Math.floor(n)} ${UNITS[t].name}`).join(', ') || 'none';
 const affordable = (p, cost) => Object.entries(cost).every(([r, v]) => (p.res[r] || 0) >= v);
 
-let store, tab = 'castle', selected = null, extras = {};
+let store, tab = 'castle', selected = null, extras = {}, tipKey = null, tipPinned = false;
+document.addEventListener('click', () => { if (tipPinned) { tipPinned = false; tipKey = null; renderTop(); } });
 const TABS = [['castle', 'Castle'], ['army', 'Army'], ['map', 'Map'], ['research', 'Research'], ['reports', 'Reports']];
 
 export function toast(msg, ms = 2600) {
@@ -39,21 +40,91 @@ export function startGameUI(s, opts = {}) {
 
 function me() { return store.state.players[store.me]; }
 
+const RES_USE = {
+  gold: 'Spent on nearly everything. Pays army upkeep and the upkeep on every tile beyond your first.',
+  food: 'Eaten by every peasant and soldier. Peasants only grow while food is in surplus; at zero, people desert.',
+  stone: 'Keep upgrades, walls, siege engines, and most mid-game buildings.',
+  mana: 'Mages, spells, and arcane research. Comes from the Mage tower and ley-line tiles.',
+};
+function tipContent(k, st, p, r) {
+  const row = (label, v, cls = '') => `<tr class="${cls}"><td>${label}</td><td class="${v < 0 ? 'bad' : v > 0 ? 'good' : 'dim'}">${v >= 0 ? '+' : ''}${v.toFixed(1)}/h</td></tr>`;
+  if (k === 'peasants') {
+    const pop = p.peasants + E.total(E.allUnits(st, store.me));
+    return `<b>👥 Peasants</b><table>
+      <tr><td>Working peasants</td><td>${fmt(p.peasants)}</td></tr>
+      <tr><td>Needed to staff your buildings</td><td class="${r.labor < 1 ? 'bad' : ''}">${r.laborNeed} (labor ${Math.round(r.labor * 100)}%)</td></tr>
+      <tr><td>Soldiers (count toward housing)</td><td>${fmt(pop - p.peasants)}</td></tr>
+      <tr><td>Population / housing cap</td><td>${fmt(pop)} / ${fmt(E.popCap(p))}</td></tr></table>
+      <p class="small dim">Peasants grow while food is in surplus and there is room in Housing. Training a soldier uses one up.</p>`;
+  }
+  const m = E.mods(p), mult = 1 + (m[`${k}Mult`] || 0);
+  const pr = r.parts;
+  let rows = (pr.buildings[k] ? row('Buildings', pr.buildings[k] * mult) : '') + (pr.tiles[k] ? row('Territory', pr.tiles[k] * mult) : '');
+  if (k === 'gold') rows += row('Peasant tax', pr.tax);
+  if (pr.unitUpkeep[k]) rows += row('Army upkeep', -pr.unitUpkeep[k]);
+  if (k === 'food') rows += row('Peasants eating', -pr.peasantFood);
+  if (k === 'gold' && pr.tileUpkeep) rows += row('Tile upkeep', -pr.tileUpkeep);
+  rows += row('Net', r.net[k], 'total');
+  const cap = E.storageCap(p), hrs = r.net[k] > 0 ? (cap - p.res[k]) / r.net[k] : null;
+  return `<b>${ICON[k]} ${k[0].toUpperCase() + k.slice(1)}</b> <span class="dim small">${fmt(p.res[k])} / ${fmt(cap)}</span>
+    <table>${rows}</table>
+    ${mult !== 1 ? `<p class="small dim">Research bonus: +${Math.round((mult - 1) * 100)}% production</p>` : ''}
+    ${hrs !== null ? `<p class="small ${hrs < 12 ? 'bad' : 'dim'}">${hrs <= 0 ? 'Storage full: production is being wasted. Upgrade the Keep.' : `Storage full in ${dur(hrs * 60)}.`}</p>` : ''}
+    <p class="small dim">${RES_USE[k]}</p>`;
+}
+
+// The header is built once and then patched in place every second, so taps and
+// hovers never land on an element that was just replaced.
+function buildTop() {
+  const top = $('#top');
+  top.innerHTML = `
+    <div class="clock"><span id="h-clock"></span><span id="h-season"></span></div>
+    <div class="res">${RESOURCES.map((k) => `<span data-tip="${k}">${ICON[k]} <b id="v-${k}"></b><span id="r-${k}" class="small"></span></span>`).join('')}
+      <span data-tip="peasants">👥 <b id="v-peasants"></b><span id="r-peasants" class="small dim"></span></span>
+      <span class="small dim" id="h-cap"></span></div>
+    <div id="tip" class="tip" hidden></div>`;
+  top.querySelectorAll('[data-tip]').forEach((el) => {
+    el.onmouseenter = () => { if (!tipPinned) { tipKey = el.dataset.tip; renderTop(); } };
+    el.onmouseleave = () => { if (!tipPinned) { tipKey = null; renderTop(); } };
+    el.onclick = (e) => {
+      e.stopPropagation();
+      const same = tipKey === el.dataset.tip && tipPinned;
+      tipKey = same ? null : el.dataset.tip; tipPinned = !same; renderTop();
+    };
+  });
+  $('#tip').onclick = (e) => e.stopPropagation();
+}
+
+let lastTabs = '';
 function renderTop() {
   const st = store.state, p = me(), r = E.rates(st, store.me);
+  if (!$('#h-clock')) buildTop();
   const cap = E.storageCap(p), pop = p.peasants + E.total(E.allUnits(st, store.me));
-  const left = st.seasonEnd - st.t;
-  $('#top').innerHTML = `
-    <div class="clock"><span>🏰 ${esc(p.name)} · ${clock(st.t)}${st.clock.speed !== 1 ? ` · ${st.clock.speed}x` : ''}</span>
-      <span>${st.ended ? 'Season over' : `Season ends in ${dur(left)}`}</span></div>
-    <div class="res">${RESOURCES.map((k) => `<span>${ICON[k]} <b>${fmt(p.res[k])}</b><span class="small ${r.net[k] < 0 ? 'bad' : 'dim'}">${r.net[k] >= 0 ? '+' : ''}${r.net[k].toFixed(0)}/h</span></span>`).join('')}
-      <span>👥 <b>${fmt(p.peasants)}</b><span class="small dim"> ${fmt(pop)}/${fmt(E.popCap(p))}</span></span>
-      <span class="small dim">cap ${fmt(cap)}</span></div>`;
-  $('#tabs').innerHTML = TABS.map(([k, n]) => {
+  $('#h-clock').textContent = `🏰 ${p.name} · ${clock(st.t)}${st.clock.speed !== 1 ? ` · ${st.clock.speed}x` : ''}`;
+  $('#h-season').textContent = st.ended ? 'Season over' : `Season ends in ${dur(st.seasonEnd - st.t)}`;
+  for (const k of RESOURCES) {
+    $(`#v-${k}`).textContent = fmt(p.res[k]);
+    const el = $(`#r-${k}`);
+    el.textContent = `${r.net[k] >= 0 ? '+' : ''}${r.net[k].toFixed(0)}/h`;
+    el.className = `small ${r.net[k] < 0 ? 'bad' : 'dim'}`;
+  }
+  $('#v-peasants').textContent = fmt(p.peasants);
+  $('#r-peasants').textContent = ` ${fmt(pop)}/${fmt(E.popCap(p))}`;
+  $('#h-cap').textContent = `cap ${fmt(cap)}`;
+  document.querySelectorAll('#top [data-tip]').forEach((el) => el.classList.toggle('on', el.dataset.tip === tipKey));
+  const tip = $('#tip');
+  tip.hidden = !tipKey;
+  if (tipKey) tip.innerHTML = tipContent(tipKey, st, p, r);
+
+  const tabs = TABS.map(([k, n]) => {
     const alert = k === 'army' && (E.incoming(st, store.me).length || st.sieges.some((x) => x.target === store.me));
     return `<button class="${tab === k ? 'on' : ''}" data-tab="${k}">${n}${alert ? ' ⚠️' : ''}</button>`;
   }).join('');
-  $('#tabs').querySelectorAll('button').forEach((b) => (b.onclick = () => { tab = b.dataset.tab; render(true); }));
+  if (tabs !== lastTabs) {
+    lastTabs = tabs;
+    $('#tabs').innerHTML = tabs;
+    $('#tabs').querySelectorAll('button').forEach((b) => (b.onclick = () => { tab = b.dataset.tab; render(true); }));
+  }
 }
 
 let lastRender = 0;
@@ -76,7 +147,13 @@ function castleView() {
   const q = p.buildQueue.map((it, i) => `<li class="row">${BUILDINGS[it.b].name} → ${it.level}
       <span class="dim small">${i < slots ? `${dur(it.remaining)} left` : 'waiting'}</span>
       <button class="danger small" data-act="cancelBuild" data-i="${i}">✕</button></li>`).join('');
-  const cards = Object.entries(BUILDINGS).map(([b, def]) => {
+  const shown = shownBuildings(p);
+  const teasers = nextBuildingUnlocks(p, shown);
+  const cards = Object.entries(BUILDINGS).filter(([b]) => shown.has(b) || teasers.has(b)).map(([b, def]) => {
+    if (teasers.has(b)) {
+      return `<div class="card locked"><div class="row"><h3>🔒 ${def.name}</h3><span class="pill">new</span></div>
+        <p class="small dim">${def.desc}</p><p class="small">Unlocks at ${E.missingReqs(p, b).map(([r, l]) => `${BUILDINGS[r].name} ${l}`).join(' + ')}</p></div>`;
+    }
     const next = E.queuedLevel(p, b) + 1, cost = E.buildCost(b, next), max = E.maxLevel(p, b);
     const blocked = next > max ? `Needs Keep ${next - CONFIG.KEEP_LEAD}` : p.buildQueue.length >= 5 ? 'Queue full' : !affordable(p, cost) ? '' : null;
     return `<div class="card"><div class="row"><h3>${def.name}</h3><span class="pill">Lv ${p.buildings[b]}</span></div>
@@ -91,11 +168,39 @@ function castleView() {
     <h2>Realm</h2>
     <div class="card small">
       Labor: <b class="${r.labor < 1 ? 'bad' : 'good'}">${Math.round(r.labor * 100)}%</b> (${fmt(p.peasants)} peasants / ${r.laborNeed} needed by economic buildings)<br>
-      Peasant tax ${ICON.gold}${r.parts.tax.toFixed(1)}/h · Tile upkeep ${ICON.gold}-${r.parts.tileUpkeep.toFixed(1)}/h · Army upkeep ${costStr(Object.fromEntries(Object.entries(r.parts.unitUpkeep).map(([k, v]) => [k, Math.round(v)])))}/h<br>
-      Tiles: ${E.ownedTiles(st, store.me).length} · Walls ${fmt(p.wallHp)}/${fmt(wm)}
-      <div class="bar"><i style="width:${wm ? (100 * p.wallHp) / wm : 0}%"></i></div>
+      Peasant tax ${ICON.gold}${r.parts.tax.toFixed(1)}/h · Tile upkeep ${ICON.gold}-${r.parts.tileUpkeep.toFixed(1)}/h · Army upkeep ${Object.values(r.parts.unitUpkeep).some((v) => v >= 0.5) ? `${costStr(Object.fromEntries(Object.entries(r.parts.unitUpkeep).map(([k, v]) => [k, Math.round(v)])))}/h` : 'none'}<br>
+      Tiles: ${E.ownedTiles(st, store.me).length}${wm ? ` · Walls ${fmt(p.wallHp)}/${fmt(wm)}
+      <div class="bar"><i style="width:${(100 * p.wallHp) / wm}%"></i></div>` : '<br>'}
       Score: <b class="gold">${E.score(st, store.me)}</b></div>
     <h2>Buildings</h2><div class="grid">${cards}</div>`;
+}
+
+// Buildings you have, are building, or can build right now.
+function shownBuildings(p) {
+  return new Set(Object.keys(BUILDINGS).filter((b) => p.buildings[b] > 0 || E.buildingUnlocked(p, b) || p.buildQueue.some((i) => i.b === b)));
+}
+// For each building you own, the next tier of locked buildings that depend on it.
+// Further tiers stay hidden so the castle screen grows with you.
+function nextBuildingUnlocks(p, shown) {
+  const out = new Set();
+  for (const src of Object.keys(BUILDINGS)) {
+    if (!(p.buildings[src] > 0)) continue;
+    const locked = Object.entries(BUILDINGS).filter(([b, d]) => !shown.has(b) && d.requires && d.requires[src] > p.buildings[src]);
+    if (!locked.length) continue;
+    const tier = Math.min(...locked.map(([, d]) => d.requires[src]));
+    for (const [b, d] of locked) {
+      if (d.requires[src] === tier && E.missingReqs(p, b).every(([r]) => p.buildings[r] > 0)) out.add(b);
+    }
+  }
+  return out;
+}
+// Units a building has unlocked, plus the next tier only.
+function visibleUnits(p, building) {
+  const L = p.buildings[building] || 0;
+  if (!L) return [];
+  const list = Object.entries(UNITS).filter(([, u]) => u.building === building);
+  const nextTier = Math.min(...list.filter(([, u]) => u.unlock > L).map(([, u]) => u.unlock));
+  return list.filter(([, u]) => u.unlock <= L || u.unlock === nextTier).map(([t]) => t);
 }
 
 function buildingEffect(b, p) {
@@ -110,8 +215,9 @@ function buildingEffect(b, p) {
   if (b === 'walls') return `<p class="small">Max wall HP ${fmt(E.wallMax(p))}</p>`;
   if (b === 'watchtower') return `<p class="small">Vision +${E.visionBonus(p)}${L >= 3 ? ' · see incoming army makeup' : ''}</p>`;
   if (b === 'magetower') return '';
-  const unlocks = Object.entries(UNITS).filter(([, u]) => u.building === b).map(([t, u]) => `${u.name} (${u.unlock})`).join(', ');
-  return unlocks ? `<p class="small">Unlocks: ${unlocks}</p>` : '';
+  const next = Object.values(UNITS).filter((u) => u.building === b && u.unlock > L).sort((x, y) => x.unlock - y.unlock)[0];
+  const have = Object.values(UNITS).filter((u) => u.building === b && u.unlock <= L).map((u) => u.name);
+  return `<p class="small">${have.length ? `Trains: ${have.join(', ')}` : ''}${next ? `${have.length ? ' · ' : ''}Next: ${next.name} at Lv ${next.unlock}` : ''}</p>`;
 }
 
 function armyView() {
@@ -129,13 +235,14 @@ function armyView() {
       <p class="small">Arrives in ${dur(m.eta)}. ${m.units ? unitList(m.units) : m.size ? `~${m.size} troops (Watchtower 3 to see makeup)` : 'Size unknown (build a Watchtower)'}</p>
       ${p.techs.hex_of_sloth && !m.hexed ? `<button data-act="cast" data-spell="hex" data-arg="${m.id}">Hex of sloth (${SPELLS.hex.mana} mana)</button>` : ''}</div>`),
   ].join('');
-  const trainable = Object.entries(UNITS).filter(([t]) => t !== 'peasant').map(([t, u]) => {
+  const trainable = Object.keys(BUILDINGS).flatMap((b) => visibleUnits(p, b)).map((t) => {
+    const u = UNITS[t];
     const why = E.canTrain(p, t);
     const maxN = Math.floor(Math.min(p.peasants, ...Object.entries(u.cost).map(([r, v]) => (p.res[r] || 0) / v)));
     return `<div class="card ${why ? 'dim' : ''}"><div class="row"><h3>${u.name}</h3><span class="pill">${Math.floor(p.army[t] || 0)} home</span></div>
       <p class="small dim">${u.desc}</p>
       <p class="small">⚔️${u.atk}${u.siege ? ` 🧱${u.siege}` : ''} ❤️${u.hp} 🛡️${u.armor} 🏃${u.speed}/h · ${costStr(u.cost)} · ${dur(E.unitTime(p, t))} each</p>
-      ${why ? `<p class="small bad">${why}</p>` : `<div class="controls"><input type="number" min="1" value="${Math.min(10, Math.max(1, maxN))}" id="n-${t}">
+      ${why ? `<p class="small bad">🔒 ${why}</p>` : `<div class="controls"><input type="number" min="1" value="${Math.min(10, Math.max(1, maxN))}" id="n-${t}">
       <button data-max="${maxN}" data-for="n-${t}">max ${maxN}</button><button class="primary" data-act="train" data-t="${t}">Train</button></div>`}</div>`;
   }).join('');
   const tq = Object.entries(p.trainQueues).flatMap(([b, q]) => q.map((it, i) => `<li>${it.count} ${UNITS[it.type].name} <span class="dim small">(${BUILDINGS[b].name}${i ? ', waiting' : `, next in ${dur(E.unitTime(p, it.type) - it.progress)}`})</span></li>`)).join('');
@@ -158,15 +265,15 @@ function armyView() {
       <div class="controls">Peasant levies: <input type="number" id="draft-n" value="20" min="1">
       <button data-act="draft">Draft</button><button data-act="release">Release</button>
       <span class="small dim">Levies fight instantly but stop working.</span></div>
-      <div class="controls">Mage stance:
+      ${p.buildings.magetower ? `<div class="controls">Mage stance:
         <button data-act="stance" data-v="battle" ${p.stance === 'battle' ? 'class="primary"' : ''}>Battle</button>
-        <button data-act="stance" data-v="ward" ${p.stance === 'ward' ? 'class="primary"' : ''}>Ward</button></div></div>
+        <button data-act="stance" data-v="ward" ${p.stance === 'ward' ? 'class="primary"' : ''}>Ward</button></div>` : ''}</div>
     ${marches.length || mine.length ? `<h2>Armies in the field</h2><ul class="list">
       ${marches.map((m) => `<li>${m.mission === 'return' ? '↩️ Returning' : `➡️ To ${m.to}`} · ${unitList(m.units)} · ${dur(m.arriveT - st.t)}
         ${m.mission === 'attack' ? `<button data-act="recall" data-id="${m.id}">Recall</button>` : ''}</li>`).join('')}
       ${mine.map((s) => `<li>🏰 Sieging ${esc(st.players[s.target].name)} · walls ${fmt(st.players[s.target].wallHp)} · ${unitList(s.units)}
         <button class="primary" data-act="assault" data-id="${s.id}">Assault now</button> <button data-act="lift" data-id="${s.id}">Lift siege</button></li>`).join('')}</ul>` : ''}
-    <h2>Standing orders</h2>
+    ${p.buildings.barracks ? `<h2>Standing orders</h2>
     <div class="card small">
       <div class="controls"><label class="inline"><input type="checkbox" id="d-auto" ${d.auto ? 'checked' : ''}> Armies act on their own every ${CONFIG.DOCTRINE_EVERY_H}h</label></div>
       <div class="controls">Target <select id="d-target"><option value="expand" ${d.target === 'expand' ? 'selected' : ''}>Expand into neutral land</option>
@@ -178,10 +285,10 @@ function armyView() {
       <div class="controls">Retreat at <input type="number" id="d-retreat" value="${Math.round(d.retreatAt * 100)}" min="5" max="90">% strength
         Garrison <input type="number" id="d-garrison" value="${Math.round(d.garrisonFrac * 100)}" min="0" max="100">% on captured tiles
         Only attack at <input type="number" id="d-ratio" value="${d.minRatio}" step="0.1" min="0.5" max="5">x their strength</div>
-      <button class="primary" data-act="doctrine">Save orders</button></div>
+      <button class="primary" data-act="doctrine">Save orders</button></div>` : ''}
     ${spells || scryed ? `<h2>Spells</h2><div class="card">${spells}${scryed ? `<ul class="list small">${scryed}</ul>` : ''}</div>` : ''}
     ${tq ? `<h2>Training</h2><ul class="list">${tq}</ul>` : ''}
-    <h2>Recruit</h2><div class="grid">${trainable}</div>`;
+    <h2>Recruit</h2>${trainable ? `<div class="grid">${trainable}</div>` : `<p class="dim">No military buildings yet. ${p.buildings.keep ? 'Build Barracks on the Castle tab.' : 'Raise a Keep to unlock the Barracks.'}</p>`}`;
 }
 
 function unitInputs(units, prefix) {
@@ -254,19 +361,56 @@ function tilePanel() {
 }
 
 function researchView() {
-  const p = me(), avail = new Set(E.availableTechs(p));
+  const p = me();
+  if (!p.buildings.keep) return '<h2>Research</h2><p class="dim">Scholars arrive once you build a Keep.</p>';
+  const avail = new Set(E.availableTechs(p));
   const trees = {};
-  for (const [id, t] of Object.entries(TECHS)) (trees[t.tree] ||= []).push([id, t]);
+  for (const [id, t] of Object.entries(TECHS)) (trees[t.tree] ||= []).push(id);
   const q = p.research.map((r, i) => `<li>${TECHS[r.id].name} <span class="small dim">${i ? 'queued' : `${dur(r.remaining)} left`}</span></li>`).join('');
   return `<h2>Research queue <span class="small dim">(max 3)</span></h2>${q ? `<ul class="list">${q}</ul>` : '<p class="dim">No research running.</p>'}
-    ${Object.entries(trees).map(([tree, list]) => `<h2>${tree}</h2><div class="grid">${list.map(([id, t]) => {
-      const done = p.techs[id], queued = p.research.some((r) => r.id === id);
-      const why = done ? 'Researched' : queued ? 'In queue' : p.buildings.keep < t.keep ? `Needs Keep ${t.keep}` : (t.req || []).filter((r) => !p.techs[r]).map((r) => `Needs ${TECHS[r].name}`).join(', ');
-      return `<div class="card ${done ? '' : avail.has(id) ? '' : 'dim'}"><div class="row"><h3>${done ? '✅ ' : ''}${t.name}</h3></div>
-        <p class="small">${effectText(t.effects)}</p>
-        <div class="row small"><span>${costStr(t.cost)} · ${dur(t.time)}</span>
-        ${avail.has(id) ? `<button data-act="research" data-id="${id}" ${affordable(p, t.cost) ? '' : 'disabled'}>Research</button>` : `<span class="dim">${why}</span>`}</div></div>`;
-    }).join('')}</div>`).join('')}`;
+    ${Object.entries(trees).map(([tree, ids]) => techTree(p, tree, ids, avail)).join('')}`;
+}
+
+// Lay a tree out by prerequisite depth and draw it as boxes joined by lines.
+// Only researched, queued, and currently available techs are named; the rest are fogged.
+function techTree(p, tree, ids, avail) {
+  const depth = {};
+  const d = (id) => depth[id] ?? (depth[id] = Math.max(-1, ...(TECHS[id].req || []).filter((r) => ids.includes(r)).map(d)) + 1);
+  ids.forEach(d);
+  const rows = [];
+  for (const id of ids) (rows[depth[id]] ||= []).push(id);
+  const col = {};
+  rows.forEach((row, r) => {
+    if (r) row.sort((a, b) => avgCol(a) - avgCol(b));
+    row.forEach((id, i) => { col[id] = (i + 0.5) / row.length; });
+  });
+  function avgCol(id) { const ps = (TECHS[id].req || []).filter((x) => x in col); return ps.length ? ps.reduce((s, x) => s + col[x], 0) / ps.length : 0; }
+  const ROW = 128, NODE_H = 104, widest = Math.max(...rows.map((r) => r.length));
+  const w = Math.min(31, 100 / widest - 2.5);
+  const state = (id) => (p.techs[id] ? 'done' : p.research.some((r) => r.id === id) ? 'queued' : avail.has(id) ? 'open' : 'fog');
+  let lines = '';
+  for (const id of ids) {
+    for (const r of TECHS[id].req || []) {
+      if (!(r in col)) continue;
+      const lit = state(r) === 'done';
+      lines += `<line x1="${col[r] * 100}%" y1="${depth[r] * ROW + NODE_H}" x2="${col[id] * 100}%" y2="${depth[id] * ROW}"
+        stroke="${lit ? '#d9a441' : '#3d3427'}" stroke-width="${lit ? 2.5 : 2}" ${lit ? '' : 'stroke-dasharray="4 4"'}/>`;
+    }
+  }
+  const nodes = ids.map((id) => {
+    const t = TECHS[id], st = state(id);
+    const pos = `left:${col[id] * 100 - w / 2}%;top:${depth[id] * ROW}px;width:${w}%;height:${NODE_H}px`;
+    if (st === 'fog') return `<div class="tech fog" style="${pos}"><span>?</span></div>`;
+    const q = p.research.findIndex((r) => r.id === id);
+    const foot = st === 'done' ? '<span class="good">Researched</span>'
+      : st === 'queued' ? `<span class="gold">${q ? 'Queued' : `${dur(p.research[0].remaining)} left`}</span>`
+      : `<button data-act="research" data-id="${id}" ${affordable(p, t.cost) && p.research.length < 3 ? '' : 'disabled'}>${costStr(t.cost)}<br>${dur(t.time)}</button>`;
+    return `<div class="tech ${st}" style="${pos}" title="${esc(effectText(t.effects))}"><b>${st === 'done' ? '✅ ' : ''}${t.name}</b>
+      <span class="small">${effectText(t.effects)}</span>${foot}</div>`;
+  }).join('');
+  const done = ids.filter((id) => p.techs[id]).length;
+  return `<h2>${tree} <span class="small dim">${done}/${ids.length}</span></h2>
+    <div class="tree" style="height:${(rows.length - 1) * ROW + NODE_H + 4}px"><svg class="tree-lines" width="100%" height="100%">${lines}</svg>${nodes}</div>`;
 }
 
 const EFFECT_TEXT = {

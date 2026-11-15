@@ -6,7 +6,7 @@ export const CONFIG = {
   TICK_MIN: 5,                 // simulation step (game minutes)
   SEASON_DAYS: 35,             // season length
   START_PEASANTS: 60,
-  START_RES: { gold: 300, food: 300, stone: 150, mana: 0 },
+  START_RES: { gold: 500, food: 300, stone: 100, mana: 0 },
   PEASANT_FOOD: 0.1,           // food/h eaten per peasant (and per drafted peasant)
   PEASANT_TAX: 0.06,           // gold/h paid by each working peasant
   POP_GROWTH: 0.04,            // logistic growth rate per hour
@@ -99,22 +99,23 @@ export const COUNTERS = {
 
 // ---------------------------------------------------------------- Buildings
 // prod: base resource/h at level 1 (scaled by L * PROD_GROWTH^(L-1) and labor)
+// requires: building levels needed before it can be built (and before the UI reveals it)
 export const BUILDINGS = {
-  keep:      { name: 'Keep', cost: { gold: 200, stone: 120 }, time: 10, max: 20,
+  keep:      { name: 'Keep', cost: { gold: 200, stone: 120 }, time: 10, max: 20, requires: { quarry: 1 },
                desc: 'Caps every other building level, raises storage, unlocks research.' },
-  housing:   { name: 'Housing', cost: { gold: 60, stone: 30 }, time: 3, desc: '+60 population cap per level (grows).' },
+  housing:   { name: 'Housing', cost: { gold: 60, stone: 30 }, time: 3, requires: { keep: 1 }, desc: '+60 population cap per level (grows).' },
   farm:      { name: 'Farms', cost: { gold: 50 }, time: 2, prod: { food: 14 }, econ: true, desc: 'Food. Every soldier and peasant eats.' },
-  market:    { name: 'Market', cost: { gold: 40, stone: 20 }, time: 2, prod: { gold: 12 }, econ: true, desc: 'Gold.' },
-  quarry:    { name: 'Quarry', cost: { gold: 60 }, time: 2, prod: { stone: 8 }, econ: true, desc: 'Stone for walls, siege, and upgrades.' },
-  barracks:  { name: 'Barracks', cost: { gold: 80, stone: 40 }, time: 4, desc: 'Infantry and knights. +8% training speed per level.' },
-  range:     { name: 'Archery range', cost: { gold: 80, stone: 30 }, time: 4, desc: 'Ranged units.' },
-  stables:   { name: 'Stables', cost: { gold: 120, food: 80 }, time: 5, desc: 'Cavalry.' },
-  workshop:  { name: 'Siege workshop', cost: { gold: 150, stone: 100 }, time: 6, desc: 'Siege engines.' },
-  magetower: { name: 'Mage tower', cost: { gold: 150, stone: 80 }, time: 6, prod: { mana: 4 }, econ: true,
+  market:    { name: 'Market', cost: { gold: 40, stone: 20 }, time: 2, prod: { gold: 12 }, econ: true, requires: { keep: 1 }, desc: 'Gold.' },
+  quarry:    { name: 'Mine', cost: { gold: 60 }, time: 2, prod: { stone: 8 }, econ: true, requires: { farm: 2 }, desc: 'Stone for the keep, walls, siege, and upgrades.' },
+  barracks:  { name: 'Barracks', cost: { gold: 80, stone: 40 }, time: 4, requires: { keep: 1 }, desc: 'Infantry and knights. +8% training speed per level.' },
+  range:     { name: 'Archery range', cost: { gold: 80, stone: 30 }, time: 4, requires: { barracks: 2 }, desc: 'Ranged units.' },
+  stables:   { name: 'Stables', cost: { gold: 120, food: 80 }, time: 5, requires: { keep: 3, barracks: 3 }, desc: 'Cavalry.' },
+  workshop:  { name: 'Siege workshop', cost: { gold: 150, stone: 100 }, time: 6, requires: { keep: 4, barracks: 3 }, desc: 'Siege engines.' },
+  magetower: { name: 'Mage tower', cost: { gold: 150, stone: 80 }, time: 6, prod: { mana: 4 }, econ: true, requires: { keep: 3 },
                desc: 'Mana, mages, and spell power.' },
-  walls:     { name: 'Walls', cost: { gold: 60, stone: 90 }, time: 5,
+  walls:     { name: 'Walls', cost: { gold: 60, stone: 90 }, time: 5, requires: { keep: 2 },
                desc: 'Wall HP and tower fire against besiegers.' },
-  watchtower:{ name: 'Watchtower', cost: { gold: 60, stone: 40 }, time: 3,
+  watchtower:{ name: 'Watchtower', cost: { gold: 60, stone: 40 }, time: 3, requires: { keep: 2 },
                desc: '+1 vision every 3 levels. Level 3+ reveals the makeup of incoming armies.' },
 };
 

@@ -10,10 +10,10 @@ for (const [t, u] of Object.entries(UNITS)) {
   const unlock = u.building ? `${BUILDINGS[u.building].name} ${u.unlock}${u.needs ? `, Stables ${u.needs.stables}` : ''}${u.tech ? `, ${TECHS[u.tech].name}` : ''}` : 'draft';
   console.log(`| ${u.name} | ${u.atk} | ${u.hp} | ${u.armor} | ${u.speed} | ${u.siege || '-'} | ${fires} | ${c(u.cost)} | ${u.time ? `${u.time}m` : 'instant'} | ${c(u.upkeep)} | ${unlock} |`);
 }
-console.log('\n| Building | Lv 2 cost | Lv 5 cost | Lv 10 cost | Lv 15 cost | Time Lv 5 / 10 / 15 / 20 |');
-console.log('|---|---|---|---|---|---|');
+console.log('\n| Building | Requires | Lv 2 cost | Lv 5 cost | Lv 10 cost | Lv 15 cost | Time Lv 5 / 10 / 15 / 20 |');
+console.log('|---|---|---|---|---|---|---|');
 for (const b of Object.keys(BUILDINGS)) {
-  console.log(`| ${BUILDINGS[b].name} | ${c(buildCost(b, 2))} | ${c(buildCost(b, 5))} | ${c(buildCost(b, 10))} | ${c(buildCost(b, 15))} | ${[5, 10, 15, 20].map((l) => dur(buildTime(b, l))).join(' / ')} |`);
+  console.log(`| ${BUILDINGS[b].name} | ${Object.entries(BUILDINGS[b].requires || {}).map(([r, l]) => `${BUILDINGS[r].name} ${l}`).join(', ') || 'start'} | ${c(buildCost(b, 2))} | ${c(buildCost(b, 5))} | ${c(buildCost(b, 10))} | ${c(buildCost(b, 15))} | ${[5, 10, 15, 20].map((l) => dur(buildTime(b, l))).join(' / ')} |`);
 }
 const trees = {};
 for (const [id, t] of Object.entries(TECHS)) (trees[t.tree] ||= []).push(t);

@@ -31,6 +31,7 @@ test('buildings respect keep lead and complete over time', () => {
   const s = newGame();
   const p = s.players.a;
   p.res = { gold: 1e6, food: 1e6, stone: 1e6, mana: 1e6 };
+  p.buildings.keep = 1;
   for (let i = 0; i < 3; i++) E.build(s, 'a', 'farm');
   assert.throws(() => E.build(s, 'a', 'farm'), /Keep/);
   E.advance(s, 48 * H);
@@ -41,6 +42,7 @@ test('training consumes peasants and produces units; draft/release round-trips',
   const s = newGame();
   const p = s.players.a;
   p.res.gold = 10000; p.res.food = 10000;
+  p.buildings.barracks = 1; p.army.militia = 10;
   const peas = p.peasants;
   E.train(s, 'a', 'militia', 10);
   assert.equal(p.peasants, peas - 10);
@@ -132,6 +134,28 @@ test('season ends and produces a ranking', () => {
   E.advance(s, 30 * H);
   assert.ok(s.ended);
   assert.equal(s.final.length, 2);
+});
+
+test('start is a single farm and buildings unlock in order', () => {
+  const s = newGame();
+  const p = s.players.a;
+  p.res = { gold: 1e6, food: 1e6, stone: 1e6, mana: 0 };
+  assert.deepEqual(Object.entries(p.buildings).filter(([, l]) => l).map(([b]) => b), ['farm']);
+  assert.deepEqual(p.army, {});
+  assert.throws(() => E.build(s, 'a', 'quarry'), /Locked: needs Farms 2/);
+  assert.throws(() => E.build(s, 'a', 'keep'), /Locked/);
+  assert.throws(() => E.build(s, 'a', 'barracks'), /Locked/);
+  E.build(s, 'a', 'farm');
+  E.advance(s, 1 * H);
+  E.build(s, 'a', 'quarry');
+  E.advance(s, 2 * H);
+  E.build(s, 'a', 'keep');
+  E.advance(s, 3 * H);
+  assert.equal(p.buildings.keep, 1);
+  E.build(s, 'a', 'barracks');
+  E.advance(s, 4 * H);
+  E.train(s, 'a', 'militia', 5);
+  assert.throws(() => E.train(s, 'a', 'pike', 5), /Barracks 3/);
 });
 
 test('applyAction dispatches and validates', () => {

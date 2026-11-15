@@ -35,7 +35,7 @@ export function createGame({ seed = 'bannerfall', players, speed = 1, realNow = 
       id: p.id, name: p.name, bot: !!p.bot, color: COLORS[i % COLORS.length],
       res: { ...C.START_RES },
       peasants: C.START_PEASANTS,
-      army: { militia: 10 },
+      army: {},
       buildings: Object.fromEntries(Object.keys(BUILDINGS).map((b) => [b, 0])),
       techs: {},
       research: [],
@@ -50,7 +50,7 @@ export function createGame({ seed = 'bannerfall', players, speed = 1, realNow = 
       seen: {},
       stats: { kills: 0, losses: 0, sacks: 0, tilesTaken: 0 },
     };
-    Object.assign(state.players[p.id].buildings, { keep: 1, housing: 1, farm: 1, market: 1, quarry: 1, barracks: 1 });
+    state.players[p.id].buildings.farm = 1;   // everything else is unlocked step by step
   });
   generateMap(state, players.map((p) => p.id));
   for (const pid of Object.keys(state.players)) updateSeen(state, pid);
@@ -476,6 +476,12 @@ export function queuedLevel(p, b) {
   return Math.max(p.buildings[b], ...p.buildQueue.filter((i) => i.b === b).map((i) => i.level));
 }
 
+// Requirements for a building, checked against built (not queued) levels.
+export function missingReqs(p, b) {
+  return Object.entries(BUILDINGS[b].requires || {}).filter(([r, l]) => (p.buildings[r] || 0) < l);
+}
+export function buildingUnlocked(p, b) { return missingReqs(p, b).length === 0; }
+
 export function maxLevel(p, b) {
   return b === 'keep' ? BUILDINGS.keep.max : Math.min(C.BUILDING_MAX, queuedLevel(p, 'keep') + C.KEEP_LEAD);
 }
@@ -484,6 +490,8 @@ export function build(state, pid, b) {
   const p = state.players[pid];
   if (!BUILDINGS[b]) throw new Error('Unknown building');
   if (p.buildQueue.length >= 5) throw new Error('Build queue is full (5)');
+  const missing = missingReqs(p, b);
+  if (missing.length) throw new Error(`Locked: needs ${missing.map(([r, l]) => `${BUILDINGS[r].name} ${l}`).join(', ')}`);
   const level = queuedLevel(p, b) + 1;
   const max = maxLevel(p, b);
   if (level > max) throw new Error(b === 'keep' ? 'Keep is maxed' : `Upgrade your Keep first (level ${level} needs Keep ${level - C.KEEP_LEAD})`);
@@ -502,6 +510,7 @@ export function cancelBuild(state, pid, index) {
 export function canTrain(p, type) {
   const u = UNITS[type];
   if (!u.building) return 'Drafted, not trained';
+  if (!(p.buildings[u.building] > 0)) return `Needs ${BUILDINGS[u.building].name}`;
   if ((p.buildings[u.building] || 0) < u.unlock) return `Needs ${BUILDINGS[u.building].name} ${u.unlock}`;
   for (const [b, l] of Object.entries(u.needs || {})) if ((p.buildings[b] || 0) < l) return `Needs ${BUILDINGS[b].name} ${l}`;
   if (u.tech && !p.techs[u.tech]) return `Needs ${TECHS[u.tech].name}`;
